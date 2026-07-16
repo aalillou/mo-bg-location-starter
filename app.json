@@ -1,25 +1,47 @@
 {
   "expo": {
-    "name": "mo-bg-location-starter",
+    "name": "bg·location starter",
     "slug": "mo-bg-location-starter",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "be.aalillou.mobglocation.starter",
+      "supportsTablet": false
     },
     "android": {
+      "package": "be.aalillou.mobglocation.starter",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      [
+        "@aalillou/mo-bg-location",
+        {
+          "notificationChannelName": "Trail tracking",
+          "locationWhenInUseText": "The demo shows your position and trail on the map while the app is open.",
+          "locationAlwaysAndWhenInUseText": "Background access lets the demo keep drawing your trail with the screen off or the app closed. Everything stays on this phone.",
+          "motionUsageText": "Motion data (steps) tells walking apart from driving for the motion chip."
+        }
+      ],
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      "expo-font",
+      "./plugins/withUserScriptSandboxingOff"
+    ]
   }
 }
