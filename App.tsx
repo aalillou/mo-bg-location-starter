@@ -1,30 +1,217 @@
 /**
- * M1/M2 PROBE — throwaway smoke-test shell, replaced by the real HUD in S2.
- * Proves on-device: SDK configure/permissions/start/stop, fixes arriving,
- * MapLibre Positron tiles, live trail + crumbs + pulsing position marker.
+ * bg·location starter — font loading, phase-machine host, composition.
+ * Map + HUD scaffold render in every phase; the phase only selects which
+ * instruments mount and which color arm the map takes.
  */
-import { useEffect, useRef, useState } from 'react';
-import { Button, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useReducer, useState } from 'react';
+import { Linking, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFonts } from 'expo-font';
 import { Manrope_700Bold, Manrope_800ExtraBold } from '@expo-google-fonts/manrope';
 import { JetBrainsMono_400Regular, JetBrainsMono_700Bold } from '@expo-google-fonts/jetbrains-mono';
-import {
-  configure,
-  getPermissions,
-  onLocation,
-  onMotionChange,
-  requestPermissions,
-  start,
-  stop,
-  type LocationEvent,
-  type MotionEvent,
-} from '@aalillou/mo-bg-location';
-import { SDK_CONFIG } from './src/sdkConfig';
-import { appendFix } from './src/lib/geo';
+
+import { Fab } from './src/components/Fab';
+import { HeadlinePill, type ChipTone } from './src/components/HeadlinePill';
+import { HintPill } from './src/components/HintPill';
+import { MiniChip } from './src/components/MiniChip';
+import { PermissionCard } from './src/components/PermissionCard';
+import { SideChip } from './src/components/SideChips';
+import { StatusLozenge } from './src/components/StatusLozenge';
+import { SummarySheet } from './src/components/SummarySheet';
 import { TrailMap } from './src/components/TrailMap';
-import type { TrailSegments, TripFix } from './src/types';
+import { useBattery } from './src/hooks/useBattery';
+import { usePermissionFlow } from './src/hooks/usePermissionFlow';
+import { useTracking } from './src/hooks/useTracking';
+import { formatAcc, formatAge, formatAgeAgo, formatCoords, formatLevelPct, formatUsedPct } from './src/lib/format';
+import { computeMetrics } from './src/lib/metrics';
+import { colorArmFor, phaseReducer } from './src/state/phase';
+import { strings } from './src/strings';
+import type { MotionBucket } from './src/types';
+
+const MOTION_LABEL: Record<MotionBucket, string> = {
+  driving: strings.motion.driving,
+  walking: strings.motion.walking,
+  still: strings.motion.still,
+};
+
+/** Re-render tick for the fix-age readouts (1 s granularity). */
+function useNow(enabled: boolean): number {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [enabled]);
+  return now;
+}
+
+function Main() {
+  const insets = useSafeAreaInsets();
+  const [phase, dispatch] = useReducer(phaseReducer, 'boot');
+  const tracking = useTracking((p) => dispatch({ type: 'RESOLVED', phase: p }));
+  const flow = usePermissionFlow();
+  const batteryLevel = useBattery();
+
+  const { session, segments, lastFix, bucket, todayUsagePct } = tracking;
+  const now = useNow(phase === 'live' || (phase === 'idle' && !!lastFix));
+
+  // permission phase: a completed grant (button or Settings round-trip)
+  // auto-starts the trip — "foreground+background ⇒ auto-start → live"
+  useEffect(() => {
+    if (phase !== 'permission' || !flow.granted) return;
+    let cancelled = false;
+    (async () => {
+      await tracking.startTrip();
+      if (!cancelled) dispatch({ type: 'GRANTED' });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, flow.granted]);
+
+  const handlePlay = async () => {
+    // perms can be revoked between trips — re-run the ladder if needed
+    const p = flow.granted ? null : await flow.request();
+    if (p && !(p.foreground && p.background)) return;
+    await tracking.startTrip();
+    dispatch({ type: 'STARTED' });
+  };
+
+  const handleStop = async () => {
+    await tracking.stopTrip();
+    dispatch({ type: 'STOPPED' });
+  };
+
+  const handleDone = () => {
+    tracking.dismissSummary();
+    dispatch({ type: 'DISMISSED' });
+  };
+
+  // ----- derived HUD state -----
+
+  const arm = colorArmFor(phase);
+  const camera = phase === 'summary' || (phase === 'idle' && segments.length > 0) ? 'fit' : 'follow';
+
+  let chipLabel: string;
+  let chipTone: ChipTone;
+  switch (phase) {
+    case 'live':
+      chipLabel = MOTION_LABEL[bucket];
+      chipTone = 'live';
+      break;
+    case 'summary':
+      chipLabel = strings.motion.ended;
+      chipTone = 'ink';
+      break;
+    case 'idle':
+      chipLabel = strings.motion.off;
+      chipTone = 'off';
+      break;
+    default: // boot, permission
+      chipLabel = strings.motion.setup;
+      chipTone = 'off';
+  }
+
+  let coords: string | undefined;
+  let monoTail: string | undefined;
+  if (phase === 'live' && lastFix) {
+    coords = formatCoords(lastFix.lat, lastFix.lng);
+    monoTail = ` · ${formatAcc(lastFix.acc)} · ${formatAge(now - lastFix.ts)}`;
+  } else if (phase === 'idle' && lastFix) {
+    coords = formatCoords(lastFix.lat, lastFix.lng);
+    monoTail = ` · ${formatAgeAgo(now - lastFix.ts)}`;
+  }
+
+  const perms = flow.perms;
+  const miniChip =
+    phase === 'summary' || !perms
+      ? null
+      : !perms.foreground || !perms.background
+        ? { ok: false, label: strings.perms.missing }
+        : !perms.precise
+          ? { ok: false, label: strings.perms.imprecise, onPress: () => Linking.openSettings() }
+          : { ok: true, label: strings.perms.granted };
+
+  let batteryValue: string | null = null;
+  if (batteryLevel != null) {
+    if (phase === 'live') {
+      const used = session?.batteryStart != null ? Math.max(0, (session.batteryStart - batteryLevel) * 100) : null;
+      batteryValue = used != null ? `${formatLevelPct(batteryLevel)} · ${formatUsedPct(used)}` : formatLevelPct(batteryLevel);
+    } else if (phase === 'idle') {
+      batteryValue = `${formatLevelPct(batteryLevel)} · ${strings.chips.todayPrefix}${formatUsedPct(todayUsagePct)}`;
+    }
+  }
+
+  const metrics = useMemo(
+    () => (phase === 'summary' && session && !session.active ? computeMetrics(session) : null),
+    [phase, session],
+  );
+
+  return (
+    <View style={styles.root}>
+      <StatusBar style="dark" />
+      <TrailMap
+        segments={segments}
+        lastFix={lastFix}
+        arm={arm}
+        camera={camera}
+        fitBottomPadding={phase === 'summary' ? 340 : 0}
+      />
+
+      {/* top: headline pill + permission mini-chip */}
+      <View style={[styles.hudTop, { top: insets.top + 24 }]} pointerEvents="box-none">
+        <HeadlinePill label={chipLabel} tone={chipTone} coords={coords} monoTail={monoTail} monoMuted={phase === 'idle'} />
+        {miniChip && <MiniChip ok={miniChip.ok} label={miniChip.label} onPress={miniChip.onPress} />}
+      </View>
+
+      {/* right: instrument chips */}
+      {(phase === 'live' || (phase === 'idle' && batteryValue != null)) && (
+        <View style={[styles.hudSide, { top: insets.top + 176 }]} pointerEvents="box-none">
+          {batteryValue != null && <SideChip label={strings.chips.batteryLabel} value={batteryValue} good />}
+          {phase === 'live' && <SideChip label={strings.chips.killedLabel} value={strings.chips.killedValue} />}
+        </View>
+      )}
+
+      {/* first run: the one blocking step */}
+      {phase === 'permission' && (
+        <View style={[styles.permWrap, { top: insets.top + 186 }]} pointerEvents="box-none">
+          <PermissionCard onGrant={() => void flow.request()} />
+        </View>
+      )}
+
+      {/* bottom: status lozenge + FAB, hint pill */}
+      {(phase === 'live' || phase === 'idle') && (
+        <>
+          <View style={[styles.hudBottom, { bottom: insets.bottom + 78 }]} pointerEvents="box-none">
+            <StatusLozenge
+              live={phase === 'live'}
+              badge={phase === 'live' ? strings.status.liveBadge : strings.status.offBadge}
+              label={phase === 'live' ? strings.status.trackingOn : strings.status.trackingOff}
+            />
+            <Fab mode={phase === 'live' ? 'stop' : 'play'} onPress={phase === 'live' ? handleStop : handlePlay} />
+          </View>
+          <View style={[styles.hudHint, { bottom: insets.bottom + 18 }]} pointerEvents="none">
+            <HintPill text={phase === 'live' ? strings.hints.live : strings.hints.idle} />
+          </View>
+        </>
+      )}
+
+      {/* trip summary sheet */}
+      {phase === 'summary' && metrics && session && (
+        <View style={[styles.sheetWrap, { paddingBottom: insets.bottom }]} pointerEvents="box-none">
+          <SummarySheet
+            metrics={metrics}
+            startedAt={session.startedAt}
+            endedAt={session.endedAt ?? Date.now()}
+            onDone={handleDone}
+          />
+        </View>
+      )}
+    </View>
+  );
+}
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -34,108 +221,56 @@ export default function App() {
     JetBrainsMono_700Bold,
   });
 
-  const [log, setLog] = useState<string[]>([]);
-  const [perms, setPerms] = useState<string>('?');
-  const [segments, setSegments] = useState<TrailSegments>([]);
-  const [lastFix, setLastFix] = useState<TripFix | undefined>();
-  const segmentsRef = useRef<TrailSegments>([]);
-  const lines = useRef<string[]>([]);
-
-  const push = (s: string) => {
-    lines.current = [`${new Date().toISOString().slice(11, 19)} ${s}`, ...lines.current].slice(0, 20);
-    setLog(lines.current);
-  };
-
-  useEffect(() => {
-    const subLoc = onLocation((e: LocationEvent) => {
-      const fix: TripFix = { lat: e.latitude, lng: e.longitude, acc: e.accuracy, ts: e.timestamp };
-      appendFix(segmentsRef.current, fix);
-      setSegments([...segmentsRef.current]); // new outer identity → re-render
-      setLastFix(fix);
-      push(`fix ${e.latitude.toFixed(5)},${e.longitude.toFixed(5)} ±${Math.round(e.accuracy)}m ${e.activity}`);
-    });
-    const subMot = onMotionChange((e: MotionEvent) => {
-      push(`motion ${e.activity} moving=${e.isMoving}`);
-    });
-    (async () => {
-      await configure(SDK_CONFIG);
-      push('configured');
-      const p = await getPermissions();
-      setPerms(JSON.stringify(p));
-    })();
-    return () => {
-      subLoc.remove();
-      subMot.remove();
-    };
-  }, []);
-
   if (!fontsLoaded) return null;
 
   return (
     <SafeAreaProvider>
-      <View style={styles.root}>
-        <StatusBar style="dark" />
-        <View style={styles.mapBox}>
-          <TrailMap segments={segments} lastFix={lastFix} arm="live" camera="follow" />
-        </View>
-        <View style={styles.panel}>
-          <Text style={styles.perms} numberOfLines={2}>
-            perms: {perms}
-          </Text>
-          <View style={styles.row}>
-            <Button
-              title="Request"
-              onPress={async () => {
-                // The documented one-shot ladder. On iOS this needs SDK ≥ 0.1.3
-                // (0.1.2's combined form skips the location stages — fixed there).
-                try {
-                  const p = await requestPermissions({ background: true, activity: true });
-                  setPerms(JSON.stringify(p));
-                } catch (e) {
-                  push(`request ERR ${String(e)}`);
-                }
-              }}
-            />
-            <Button
-              title="Start"
-              onPress={async () => {
-                try {
-                  await start();
-                  push('started');
-                } catch (e) {
-                  push(`start ERR ${String(e)}`);
-                }
-              }}
-            />
-            <Button
-              title="Stop"
-              onPress={async () => {
-                try {
-                  await stop();
-                  push('stopped');
-                } catch (e) {
-                  push(`stop ERR ${String(e)}`);
-                }
-              }}
-            />
-          </View>
-          <ScrollView style={styles.log}>
-            {log.map((l, i) => (
-              <Text key={i} style={styles.line}>{l}</Text>
-            ))}
-          </ScrollView>
-        </View>
-      </View>
+      <Main />
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
-  mapBox: { flex: 1 },
-  panel: { height: 260, backgroundColor: '#fff', padding: 12, paddingBottom: 24 },
-  perms: { fontSize: 11, color: '#4a5866' },
-  row: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 6 },
-  log: { flex: 1 },
-  line: { fontSize: 11, fontFamily: 'monospace', color: '#1d2733' },
+  root: { flex: 1, backgroundColor: '#f3f6f9' }, // map bg while tiles load
+  hudTop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    gap: 10, // 8
+  },
+  hudSide: {
+    position: 'absolute',
+    right: 12, // 10
+    alignItems: 'flex-end',
+    gap: 10, // 8
+  },
+  permWrap: {
+    position: 'absolute',
+    left: 30, // 24
+    right: 30,
+  },
+  hudBottom: {
+    position: 'absolute',
+    left: 15, // 12
+    right: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12, // 10
+  },
+  hudHint: {
+    position: 'absolute',
+    left: 25, // 20
+    right: 25,
+  },
+  sheetWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#ffffff', // sheet color continues under the home indicator
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+  },
 });

@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aalillou/mo-bg-location": "0.1.2",
+    "@aalillou/mo-bg-location": "0.1.4",
     "@expo-google-fonts/jetbrains-mono": "0.4.1",
     "@expo-google-fonts/manrope": "0.4.2",
     "@maplibre/maplibre-react-native": "11.3.6",

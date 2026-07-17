@@ -3,6 +3,11 @@
  * crumbs, origin ring, position dot on top). Colors swap per ColorArm:
  * live = blue dashed route · ended = blue solid + red arrival dot ·
  * off = grey ghost · setup = streets only.
+ *
+ * Camera-follow is gesture-aware: the first fix after entering follow mode
+ * zooms to 16; afterwards only the center eases (a manual pinch-zoom
+ * persists). Any user pan/zoom pauses following entirely, and it resumes —
+ * at the user's zoom — once a new fix lands outside the visible map.
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -14,6 +19,7 @@ import {
   Map as MapLibreMap,
   Marker,
   type CameraRef,
+  type MapRef,
 } from '@maplibre/maplibre-react-native';
 import { MAP_STYLE_URL } from '../sdkConfig';
 import { boundsOf, crumbsToGeoJSON, downsampleCrumbs, pointGeoJSON, trailToGeoJSON } from '../lib/geo';
@@ -35,6 +41,11 @@ export interface TrailMapProps {
 export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 }: TrailMapProps) {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<CameraRef>(null);
+  const mapRef = useRef<MapRef>(null);
+  /** True after the user pans/zooms — follow pauses until the fix leaves the screen. */
+  const userMovedMap = useRef(false);
+  /** First follow fix zooms to 16; later ones ease center-only (keep user zoom). */
+  const followStarted = useRef(false);
 
   const ghost = arm === 'off' || arm === 'setup';
   const routeColor = ghost ? colors.greyOff : colors.blue;
@@ -47,6 +58,9 @@ export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 
 
   useEffect(() => {
     if (camera !== 'fit') return;
+    // entering fit mode re-arms follow for the next live entry
+    userMovedMap.current = false;
+    followStarted.current = false;
     const bounds = boundsOf(segments);
     if (!bounds) return;
     cameraRef.current?.fitBounds(bounds, {
@@ -55,21 +69,52 @@ export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 
     });
   }, [camera, segments, fitBottomPadding, insets.top]);
 
+  // gesture-aware follow (imperative — declarative props would re-assert
+  // center+zoom on every fix and fight the user's fingers)
+  useEffect(() => {
+    if (camera !== 'follow' || !lastFix) return;
+    const center: [number, number] = [lastFix.lng, lastFix.lat];
+    if (!followStarted.current) {
+      followStarted.current = true;
+      cameraRef.current?.easeTo({ center, zoom: 16, duration: 800 });
+      return;
+    }
+    if (!userMovedMap.current) {
+      cameraRef.current?.easeTo({ center, duration: 800 }); // same zoom level
+      return;
+    }
+    // paused by a gesture: resume only when the fix walks off-screen
+    let stale = false;
+    mapRef.current
+      ?.getBounds()
+      .then(([w, s, e, n]) => {
+        if (stale) return;
+        const outside = lastFix.lng < w || lastFix.lng > e || lastFix.lat < s || lastFix.lat > n;
+        if (outside) {
+          userMovedMap.current = false;
+          cameraRef.current?.easeTo({ center, duration: 800 });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [camera, lastFix]);
+
   return (
     <View style={StyleSheet.absoluteFill}>
       <MapLibreMap
+        ref={mapRef}
         style={StyleSheet.absoluteFill}
         mapStyle={MAP_STYLE_URL}
         attribution={false}
         logo={false}
         compass={false}
+        onRegionIsChanging={(e) => {
+          if (e.nativeEvent.userInteraction) userMovedMap.current = true;
+        }}
       >
-        <Camera
-          ref={cameraRef}
-          {...(camera === 'follow' && lastFix
-            ? { center: [lastFix.lng, lastFix.lat] as [number, number], zoom: 16, duration: 800 }
-            : {})}
-        />
+        <Camera ref={cameraRef} />
         <GeoJSONSource id="trail" data={trail}>
           <Layer
             id="trail-casing"
