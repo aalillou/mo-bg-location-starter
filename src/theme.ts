@@ -27,6 +27,7 @@ export const colors = {
   offBadgeBg: '#f0f5f9',
   greenText: '#2aa35a', // green on light backgrounds
   greenBadgeBg: '#e9f9f0',
+  amberText: '#bd8210', // darkened amber for readable text on light (RESTING chip)
   permIconBg: '#eef7fc',
   // map artwork
   routeCasing: '#c9e9f9',

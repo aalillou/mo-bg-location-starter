@@ -21,8 +21,14 @@ export interface RecorderSnapshot {
   /** Derived trail; outer array identity changes on every snapshot. */
   segments: TrailSegments;
   lastFix?: TripFix;
-  /** Current motion bucket (drives the headline chip while live). */
+  /** Current motion bucket (time-split; drives the summary). */
   bucket: MotionBucket;
+  /**
+   * Last SDK `isMoving`. The live chip reads THIS, not the bucket: on iOS the
+   * travel label latches (never `still`) and only `isMoving` flips false, so
+   * `false` ⇒ RESTING while `true` ⇒ IN VEHICLE / ON FOOT (by bucket).
+   */
+  isMoving: boolean;
   /** Battery % used by trips today (persisted accumulator). */
   todayUsagePct: number;
 }
@@ -48,6 +54,8 @@ export class TripRecorder {
   private session: TripSession | null = null;
   private segments: TrailSegments = [];
   private bucket: MotionBucket = 'still';
+  /** Default RESTING until the first SDK event reports movement (honest on revival too). */
+  private isMoving = false;
   private lastAccrueTs = 0;
   private usageDay = todayKey();
   private todayUsagePct = 0;
@@ -85,6 +93,7 @@ export class TripRecorder {
     };
     this.segments = [];
     this.bucket = 'still';
+    this.isMoving = false;
     this.lastAccrueTs = this.session.startedAt;
     this.persistNow();
     this.notify(true);
@@ -119,6 +128,7 @@ export class TripRecorder {
     appendFix(this.segments, fix);
     this.accrue(Date.now());
     this.bucket = bucketOf(e.activity, this.bucket);
+    this.isMoving = e.isMoving;
     if (++this.fixesSinceSave >= PERSIST_EVERY_FIXES || Date.now() - this.lastSaveTs >= PERSIST_EVERY_MS) {
       this.persistNow();
     }
@@ -129,6 +139,7 @@ export class TripRecorder {
     if (!this.session?.active) return;
     this.accrue(Date.now());
     this.bucket = bucketOf(e.activity, this.bucket);
+    this.isMoving = e.isMoving;
     this.notify();
   }
 
@@ -139,6 +150,7 @@ export class TripRecorder {
       segments: [...this.segments],
       lastFix: lastSeg?.[lastSeg.length - 1],
       bucket: this.bucket,
+      isMoving: this.isMoving,
       todayUsagePct: this.todayUsagePct,
     };
   }

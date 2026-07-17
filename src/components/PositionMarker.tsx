@@ -1,7 +1,8 @@
 /**
  * The position dot + pulsing halo (mockup: dot r7 white-stroke 3; halo
  * opacity .2, scale .45→1.7 fade over 2 s). Blue while live, red as the
- * trip-summary arrival marker, grey (pulse hidden) when off.
+ * trip-summary arrival marker, grey (pulse hidden) when off. `paused` keeps
+ * the color but stills the pulse (RESTING — trip paused, not off).
  */
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
@@ -19,9 +20,9 @@ const ARM_COLOR: Record<ColorArm, string> = {
   setup: colors.greyOff,
 };
 
-export function PositionMarker({ arm }: { arm: ColorArm }) {
+export function PositionMarker({ arm, paused = false }: { arm: ColorArm; paused?: boolean }) {
   const pulse = useRef(new Animated.Value(0)).current;
-  const pulsing = arm === 'live' || arm === 'ended';
+  const pulsing = (arm === 'live' || arm === 'ended') && !paused;
 
   useEffect(() => {
     if (!pulsing) return;

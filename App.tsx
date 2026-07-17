@@ -27,13 +27,6 @@ import { formatAcc, formatAge, formatAgeAgo, formatCoords, formatLevelPct, forma
 import { computeMetrics } from './src/lib/metrics';
 import { colorArmFor, phaseReducer } from './src/state/phase';
 import { strings } from './src/strings';
-import type { MotionBucket } from './src/types';
-
-const MOTION_LABEL: Record<MotionBucket, string> = {
-  driving: strings.motion.driving,
-  walking: strings.motion.walking,
-  still: strings.motion.still,
-};
 
 /** Re-render tick for the fix-age readouts (1 s granularity). */
 function useNow(enabled: boolean): number {
@@ -53,7 +46,7 @@ function Main() {
   const flow = usePermissionFlow();
   const batteryLevel = useBattery();
 
-  const { session, segments, lastFix, bucket, todayUsagePct } = tracking;
+  const { session, segments, lastFix, bucket, isMoving, todayUsagePct } = tracking;
   const now = useNow(phase === 'live' || (phase === 'idle' && !!lastFix));
 
   // permission phase: a completed grant (button or Settings round-trip)
@@ -94,12 +87,23 @@ function Main() {
   const arm = colorArmFor(phase);
   const camera = phase === 'summary' || (phase === 'idle' && segments.length > 0) ? 'fit' : 'follow';
 
+  // RESTING = live phase, no movement. iOS latches the travel label, so we read
+  // isMoving (not the bucket) for the moving/still split — honest on both.
+  const resting = phase === 'live' && !isMoving;
+
   let chipLabel: string;
   let chipTone: ChipTone;
+  let chipNote: string | undefined;
   switch (phase) {
     case 'live':
-      chipLabel = MOTION_LABEL[bucket];
-      chipTone = 'live';
+      if (resting) {
+        chipLabel = strings.motion.resting;
+        chipTone = 'rest';
+        chipNote = strings.motion.restingSub;
+      } else {
+        chipLabel = bucket === 'driving' ? strings.motion.inVehicle : strings.motion.onFoot;
+        chipTone = 'live';
+      }
       break;
     case 'summary':
       chipLabel = strings.motion.ended;
@@ -152,17 +156,24 @@ function Main() {
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
-      <TrailMap
-        segments={segments}
-        lastFix={lastFix}
-        arm={arm}
-        camera={camera}
-        fitBottomPadding={phase === 'summary' ? 340 : 0}
-      />
+      {/* Mount the map only once tracking has resolved, so a restored session's
+          lastFix is known at first mount and seeds the initial camera (see
+          TrailMap initialView) — a cold reopen opens framed on the last
+          position, offline included. Boot shows the plain page background. */}
+      {phase !== 'boot' && (
+        <TrailMap
+          segments={segments}
+          lastFix={lastFix}
+          arm={arm}
+          camera={camera}
+          resting={resting}
+          fitBottomPadding={phase === 'summary' ? 340 : 0}
+        />
+      )}
 
       {/* top: headline pill + permission mini-chip */}
       <View style={[styles.hudTop, { top: insets.top + 24 }]} pointerEvents="box-none">
-        <HeadlinePill label={chipLabel} tone={chipTone} coords={coords} monoTail={monoTail} monoMuted={phase === 'idle'} />
+        <HeadlinePill label={chipLabel} tone={chipTone} coords={coords} monoTail={monoTail} monoMuted={phase === 'idle'} note={chipNote} />
         {miniChip && <MiniChip ok={miniChip.ok} label={miniChip.label} onPress={miniChip.onPress} />}
       </View>
 

@@ -34,11 +34,13 @@ export interface TrailMapProps {
   arm: ColorArm;
   /** 'follow' tracks lastFix at z16; 'fit' frames the whole trail (summary). */
   camera: 'follow' | 'fit';
+  /** RESTING: keep the blue marker but stop its pulse (trip paused, not off). */
+  resting?: boolean;
   /** Extra bottom padding for 'fit' (space for the summary sheet). */
   fitBottomPadding?: number;
 }
 
-export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 }: TrailMapProps) {
+export function TrailMap({ segments, lastFix, arm, camera, resting = false, fitBottomPadding = 0 }: TrailMapProps) {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<CameraRef>(null);
   const mapRef = useRef<MapRef>(null);
@@ -46,6 +48,17 @@ export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 
   const userMovedMap = useRef(false);
   /** First follow fix zooms to 16; later ones ease center-only (keep user zoom). */
   const followStarted = useRef(false);
+  // Seed the initial camera from the first known fix so a cold reopen opens
+  // *framed on the last position* — read once at native map-load, so it's
+  // immune to the ref-null race that drops the imperative easeTo at mount
+  // (and to offline reopen, where no later fix arrives to retrigger it → the
+  // map would otherwise sit at the zoom-0 globe with a continent-sized dot).
+  // Live follow below stays imperative. App gates this mount until tracking
+  // resolves, so `lastFix` is already the restored position here.
+  const initialView = useRef<{ center: [number, number]; zoom: number } | undefined>(undefined);
+  if (!initialView.current && lastFix) {
+    initialView.current = { center: [lastFix.lng, lastFix.lat], zoom: 16 };
+  }
 
   const ghost = arm === 'off' || arm === 'setup';
   const routeColor = ghost ? colors.greyOff : colors.blue;
@@ -114,7 +127,7 @@ export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 
           if (e.nativeEvent.userInteraction) userMovedMap.current = true;
         }}
       >
-        <Camera ref={cameraRef} />
+        <Camera ref={cameraRef} initialViewState={initialView.current} />
         <GeoJSONSource id="trail" data={trail}>
           <Layer
             id="trail-casing"
@@ -154,7 +167,7 @@ export function TrailMap({ segments, lastFix, arm, camera, fitBottomPadding = 0 
         )}
         {lastFix && arm !== 'setup' && (
           <Marker id="position" lngLat={[lastFix.lng, lastFix.lat]}>
-            <PositionMarker arm={arm} />
+            <PositionMarker arm={arm} paused={resting} />
           </Marker>
         )}
       </MapLibreMap>

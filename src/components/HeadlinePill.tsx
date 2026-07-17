@@ -1,12 +1,13 @@
 /**
  * Top-center headline pill: Mo mark + motion chip, with the mono position
  * line underneath while live/idle. Chip color arms per mockup: green while
- * tracking, grey when off/setup, ink+blue dot for TRIP ENDED.
+ * tracking, grey when off/setup, ink+blue dot for TRIP ENDED, calm amber for
+ * RESTING (isMoving===false) with a reassurance subline below the mono line.
  */
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, shadows, sizes } from '../theme';
 
-export type ChipTone = 'live' | 'off' | 'ink';
+export type ChipTone = 'live' | 'off' | 'ink' | 'rest';
 
 export interface HeadlinePillProps {
   label: string;
@@ -17,20 +18,24 @@ export interface HeadlinePillProps {
   monoTail?: string;
   /** Muted mono line (idle). */
   monoMuted?: boolean;
+  /** Amber reassurance subline under the mono line (RESTING). */
+  note?: string;
 }
 
 const TONE_TEXT: Record<ChipTone, string> = {
   live: colors.greenText,
   off: colors.muted,
   ink: colors.ink,
+  rest: colors.amberText,
 };
 const TONE_DOT: Record<ChipTone, string> = {
   live: colors.green,
   off: colors.greyOff,
   ink: colors.blue,
+  rest: colors.amber,
 };
 
-export function HeadlinePill({ label, tone, coords, monoTail, monoMuted }: HeadlinePillProps) {
+export function HeadlinePill({ label, tone, coords, monoTail, monoMuted, note }: HeadlinePillProps) {
   return (
     <View style={styles.pill}>
       <View style={styles.headRow}>
@@ -46,6 +51,7 @@ export function HeadlinePill({ label, tone, coords, monoTail, monoMuted }: Headl
           {monoTail}
         </Text>
       )}
+      {note != null && <Text style={styles.note}>{note}</Text>}
     </View>
   );
 }
@@ -97,5 +103,11 @@ const styles = StyleSheet.create({
   },
   monoMuted: {
     color: colors.muted,
+  },
+  note: {
+    fontFamily: fonts.bold,
+    fontSize: sizes.miniChip,
+    color: colors.amberText,
+    letterSpacing: 0.2,
   },
 });
